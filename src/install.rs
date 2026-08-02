@@ -21,6 +21,7 @@ use crate::fmt::{print_indent, print_install, print_install_verbose};
 use crate::keys::check_pgp_keys;
 use crate::pkgbuild::PkgbuildRepo;
 use crate::resolver::{flags, resolver};
+use crate::security::{self, SecurityDecision};
 use crate::upgrade::{get_upgrades, Upgrades};
 use crate::util::{ask, repo_aur_pkgs, split_repo_aur_targets};
 use crate::{args, exec, news, print_error, printtr, repo};
@@ -1137,6 +1138,10 @@ impl Installer {
 
         let bases = actions.iter_aur_pkgs().cloned().collect();
         self.download_pkgbuilds(config, &bases).await?;
+
+        if security::check(config, &bases).await? == SecurityDecision::Abort {
+            return Status::err(1);
+        }
 
         for pkg in &actions.build {
             match pkg {

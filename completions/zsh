@@ -50,6 +50,7 @@ _pacman_opts_common=(
 	{-a,--aur}'[Assume targets are from the AUR]'
 	'--aururl[Set an alternative AUR URL]:url'
 	'--aurrpcurl[Set an alternative URL for the AUR /rpc endpoint]:url'
+	'--aursecurityurl[Set an alternative AUR security API URL]:url'
 
 	'--clonedir[Directory used to download and run PKGBUILDs]:build dir:_files -/'
 	'--makepkg[makepkg command to use]:makepkg:_files'
@@ -122,6 +123,8 @@ _pacman_opts_common=(
 
 	'--skipreview[Skip the review process]'
 	"--review[Don't skip the review process]"
+	'--skipaursecurity[Skip AUR security assessments]'
+	'--aursecurity[Enable AUR security assessments]'
 )
 
 # options for passing to _arguments: options for --upgrade commands

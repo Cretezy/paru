@@ -273,6 +273,19 @@ This option disables that behavior, keeping the both all versions and only updat
 .B SkipReview
 Skip the review process.
 
+.TP
+.B AurSecurityUrl = URL
+Set the base URL for the AUR security assessment service. The default is
+https://aur-security.cretezy.com. Paru queries the service after downloading
+an AUR package repository and before running pre-build commands or builds.
+Suspicious, dangerous, and unreviewed commits require interactive confirmation.
+With --noconfirm, only a dangerous assessment aborts the transaction. Service
+errors produce a warning and do not prevent installation.
+
+.TP
+.B SkipAurSecurity
+Disable AUR security assessment lookups.
+
 .SH BIN
 Options belonging to the [bin] section.
 

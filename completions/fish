@@ -196,6 +196,7 @@ complete -c $progname -n "not $noopt" -l repo -d 'Assume targets are from the re
 complete -c $progname -n "not $noopt" -s a -l aur -d 'Assume targets are from the AUR' -f
 complete -c $progname -n "not $noopt" -l aururl -d 'Set an alternative AUR URL' -f
 complete -c $progname -n "not $noopt" -l aurrpcurl -d 'Set an alternative URL for the AUR /rpc endpoint' -f
+complete -c $progname -n "not $noopt" -l aursecurityurl -d 'Set an alternative AUR security API URL' -x
 complete -c $progname -n "not $noopt" -l clonedir -d 'Directory used to download and run PKGBUILDs' -r
 complete -c $progname -n "not $noopt" -l makepkg -d 'Makepkg command to use' -f
 complete -c $progname -n "not $noopt" -l pacman -d 'Pacman command to use' -f
@@ -262,3 +263,5 @@ complete -c $progname -n "not $noopt" -l localrepo -d 'Build packages in a local
 complete -c $progname -n "not $noopt" -l nolocalrepo -d "Don't build packages in a local repo" -f
 complete -c $progname -n "not $noopt" -l skipreview -d 'Skip the review process' -f
 complete -c $progname -n "not $noopt" -l review -d "Don't skip the review process" -f
+complete -c $progname -n "not $noopt" -l skipaursecurity -d 'Skip AUR security assessments' -f
+complete -c $progname -n "not $noopt" -l aursecurity -d 'Enable AUR security assessments' -f

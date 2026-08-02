@@ -19,6 +19,7 @@ mod query;
 mod remove;
 mod repo;
 mod search;
+mod security;
 mod stats;
 mod sync;
 mod upgrade;

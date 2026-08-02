@@ -409,6 +409,8 @@ pub struct Config {
     pub aur_rpc_url: Option<Url>,
     #[default(Url::parse("https://archlinux.org").unwrap())]
     pub arch_url: Url,
+    #[default(Url::parse("https://aur-security.cretezy.com").unwrap())]
+    pub aur_security_url: Url,
     pub build_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub state_dir: PathBuf,
@@ -445,6 +447,7 @@ pub struct Config {
     pub version: bool,
 
     pub skip_review: bool,
+    pub skip_aur_security: bool,
     pub no_check: bool,
     pub no_confirm: bool,
     pub devel: bool,
@@ -1040,6 +1043,7 @@ then initialise it with:
 
         match key {
             "SkipReview" => self.skip_review = true,
+            "SkipAurSecurity" => self.skip_aur_security = true,
             "BottomUp" => self.sort_mode = SortMode::BottomUp,
             "AurOnly" => self.mode = Mode::AUR,
             "PkgbuildsOnly" => self.mode = Mode::PKGBUILD,
@@ -1108,6 +1112,7 @@ then initialise it with:
             }
             "AurUrl" => self.aur_url = value?.parse()?,
             "AurRpcUrl" => self.aur_rpc_url = Some(value?.parse()?),
+            "AurSecurityUrl" => self.aur_security_url = value?.parse()?,
             "BuildDir" | "CloneDir" => self.build_dir = PathBuf::from(value?),
             "Redownload" => self.redownload = ConfigEnum::from_str(key, value?.as_str())?,
             "Rebuild" => self.rebuild = ConfigEnum::from_str(key, value?.as_str())?,

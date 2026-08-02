@@ -69,7 +69,7 @@ _paru() {
   common=('arch cachedir color config confirm dbpath debug gpgdir help hookdir logfile
            noconfirm noprogressbar noscriptlet quiet root verbose
 
-           repo aur aururl clonedir makepkg mflags pacman pacman-conf git gitflags sudo sudoflags
+           repo aur aururl aursecurityurl clonedir makepkg mflags pacman pacman-conf git gitflags sudo sudoflags
            asp gpg gpgflags fm fmflags chrootflags pager completioninterval sortby searchby limit
            upgrademenu removemake noremovemake cleanafter nocleanafter rebuild rebuildall norebuild
            rebuildtree redownload noredownload redownloadall pgpfetch nopgpfetch useask
@@ -77,7 +77,7 @@ _paru() {
            nocombinedupgrade batchinstall nobatchinstall provides noprovides devel nodevel
            develsuffixes sudoloop nosudoloop bottomup topdown newsonupgrade bat batflags
            chroot nochroot sign nosign keeprepocache nokeeprepocache signdb nosigndb
-           localrepo nolocalrepo review skipreview' 'b d h q r v a')
+           localrepo nolocalrepo review skipreview aursecurity skipaursecurity' 'b d h q r v a')
 
   show=('news stats' 'w s')
   getpkgbuild=('print comments' 'p c')
