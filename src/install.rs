@@ -1121,7 +1121,10 @@ impl Installer {
             false
         };
 
-        if !config.skip_review && actions.iter_aur_pkgs().next().is_some() {
+        if !config.skip_review
+            && !config.skip_review_safe
+            && actions.iter_aur_pkgs().next().is_some()
+        {
             if !ask(config, &tr!("Proceed to review?"), true) {
                 return Status::err(1);
             }
@@ -1139,9 +1142,10 @@ impl Installer {
         let bases = actions.iter_aur_pkgs().cloned().collect();
         self.download_pkgbuilds(config, &bases).await?;
 
-        if security::check(config, &bases).await? == SecurityDecision::Abort {
-            return Status::err(1);
-        }
+        let safe_packages = match security::check(config, &bases).await? {
+            SecurityDecision::Continue(safe_packages) => safe_packages,
+            SecurityDecision::Abort => return Status::err(1),
+        };
 
         for pkg in &actions.build {
             match pkg {
@@ -1170,6 +1174,9 @@ impl Installer {
                 .filter_map(|b| match b {
                     Base::Aur(pkg) => Some(pkg.package_base()),
                     Base::Pkgbuild(_) => None,
+                })
+                .filter(|package_base| {
+                    !config.skip_review_safe || !safe_packages.contains(*package_base)
                 })
                 .collect::<Vec<_>>();
             review(config, &config.fetch, &pkgs)?;

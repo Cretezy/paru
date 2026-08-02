@@ -303,8 +303,8 @@ Set an alternative AUR URL.
 Set an alternative URL for the AUR /rpc endpoint.
 
 .TP
-.B \-\-aursecurityurl <url>
-Set an alternative base URL for the AUR security assessment service.
+.B \-\-aursecurityremoteurl <url>
+Set an alternative base URL for the remote AUR security service.
 
 .TP
 .B \-\-clonedir <dir>
@@ -463,12 +463,20 @@ Skip the review process.
 Don't skip the review process.
 
 .TP
+.B \-\-skipreviewsafe
+Skip review for safely assessed AUR package bases.
+
+.TP
+.B \-\-reviewsafe
+Review safely assessed AUR package bases.
+
+.TP
 .B \-\-skipaursecurity
-Skip AUR security assessment lookups.
+Skip remote and local AUR security assessments.
 
 .TP
 .B \-\-aursecurity
-Enable AUR security assessment lookups.
+Enable configured remote and local AUR security assessments.
 
 .TP
 .B \-\-upgrademenu

@@ -1,7 +1,10 @@
+use std::collections::HashSet;
+use std::io::{self, Write};
 use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use aur_ai_security_checker::{check_package, Provider, Verdict as LocalVerdict};
 use serde::{Deserialize, Serialize};
 use tr::tr;
 use url::Url;
@@ -12,12 +15,12 @@ use crate::exec;
 use crate::util::ask;
 
 const LOOKUP_PATH: &str = "/api/v1/checks/lookup";
-const MAX_LOOKUPS: usize = 100;
+const MAX_LOOKUPS: usize = 1000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum SecurityDecision {
-    Continue,
+    Continue(HashSet<String>),
     Abort,
 }
 
@@ -25,6 +28,8 @@ pub enum SecurityDecision {
 struct LookupPackage {
     package_base: String,
     commit: String,
+    #[serde(skip)]
+    version: String,
 }
 
 #[derive(Serialize)]
@@ -41,11 +46,11 @@ struct LookupResponse {
 struct LookupResult {
     package_base: String,
     commit: String,
-    assessment: Option<Assessment>,
+    assessment: Option<RemoteAssessment>,
 }
 
 #[derive(Debug, Deserialize)]
-struct Assessment {
+struct RemoteAssessment {
     verdict: Verdict,
     explanation: Option<String>,
     provider: String,
@@ -64,14 +69,50 @@ enum Verdict {
     Dangerous,
 }
 
+struct Assessment {
+    verdict: Verdict,
+    explanation: Option<String>,
+    provider: String,
+    model: String,
+    version: String,
+    details_path: Option<String>,
+}
+
+struct CheckResult {
+    package_base: String,
+    commit: String,
+    assessment: Option<Assessment>,
+}
+
 struct Unavailable {
     package_base: String,
     error: anyhow::Error,
 }
 
+#[derive(Clone, Copy)]
+struct LocalConfig<'a> {
+    provider: Provider,
+    model: &'a str,
+}
+
 pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
     if config.skip_aur_security || bases.bases.is_empty() {
-        return Ok(SecurityDecision::Continue);
+        return Ok(SecurityDecision::Continue(HashSet::new()));
+    }
+
+    let local = match local_config(config) {
+        Ok(local) => local,
+        Err(error) => {
+            print_local_warning(config, &error);
+            if !config.aur_security_remote {
+                return Ok(SecurityDecision::Continue(HashSet::new()));
+            }
+            None
+        }
+    };
+    if !config.aur_security_remote && local.is_none() {
+        print_configuration_help(config);
+        return Ok(SecurityDecision::Continue(HashSet::new()));
     }
 
     let mut packages = Vec::with_capacity(bases.bases.len());
@@ -82,6 +123,7 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
             Ok(commit) => packages.push(LookupPackage {
                 package_base: package_base.to_string(),
                 commit,
+                version: base.version(),
             }),
             Err(error) => unavailable.push(Unavailable {
                 package_base: package_base.to_string(),
@@ -90,48 +132,64 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
         }
     }
 
-    let endpoint = match config
-        .aur_security_url
-        .join(LOOKUP_PATH)
-        .context(tr!("invalid AUR security API URL"))
-    {
-        Ok(endpoint) => endpoint,
-        Err(error) => {
-            print_api_warning(config, &error);
-            return Ok(SecurityDecision::Continue);
+    let results = if config.aur_security_remote {
+        match lookup_remote(config, &packages).await {
+            Ok(results) => results,
+            Err(error) => {
+                print_remote_warning(config, &error);
+                if local.is_none() {
+                    return Ok(SecurityDecision::Continue(HashSet::new()));
+                }
+                unreviewed_results(&packages)
+            }
         }
-    };
-    let client = match reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent(format!(
-            "paru/{}",
-            option_env!("PARU_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
-        ))
-        .build()
-        .context(tr!("failed to create AUR security API client"))
-    {
-        Ok(client) => client,
-        Err(error) => {
-            print_api_warning(config, &error);
-            return Ok(SecurityDecision::Continue);
-        }
+    } else {
+        unreviewed_results(&packages)
     };
 
-    let mut results = Vec::with_capacity(packages.len());
-    for chunk in packages.chunks(MAX_LOOKUPS) {
-        match lookup(&client, &endpoint, chunk).await {
-            Ok(mut chunk_results) => results.append(&mut chunk_results),
-            Err(error) => {
-                print_api_warning(config, &error);
-                return Ok(SecurityDecision::Continue);
+    let (mut results, pending): (Vec<_>, Vec<_>) = results
+        .into_iter()
+        .partition(|result| result.assessment.is_some());
+
+    print_report_header(config);
+    for result in &results {
+        print_result(config, result);
+    }
+
+    if let Some(local) = local {
+        if !pending.is_empty() {
+            print_local_start(config, pending.len(), local);
+        }
+        for mut result in pending {
+            let package = packages
+                .iter()
+                .find(|package| package.package_base == result.package_base)
+                .expect("lookup results were validated against requested packages");
+            match assess_locally(local, package).await {
+                Ok(assessment) => {
+                    result.assessment = Some(assessment);
+                    print_result(config, &result);
+                    results.push(result);
+                }
+                Err(error) => unavailable.push(Unavailable {
+                    package_base: result.package_base,
+                    error,
+                }),
             }
+        }
+    } else {
+        for result in pending {
+            print_result(config, &result);
+            results.push(result);
         }
     }
 
-    print_report(config, &results, &unavailable);
+    for item in &unavailable {
+        print_unavailable(config, item);
+    }
 
+    let safe_packages = safe_packages(&results);
     let (has_risk, dangerous) = risk_state(&results, !unavailable.is_empty());
-
     if config.no_confirm {
         if dangerous {
             eprintln!(
@@ -143,7 +201,7 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
             );
             return Ok(SecurityDecision::Abort);
         }
-        return Ok(SecurityDecision::Continue);
+        return Ok(SecurityDecision::Continue(safe_packages));
     }
 
     if has_risk
@@ -156,7 +214,38 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
         return Ok(SecurityDecision::Abort);
     }
 
-    Ok(SecurityDecision::Continue)
+    Ok(SecurityDecision::Continue(safe_packages))
+}
+
+fn local_config(config: &Config) -> Result<Option<LocalConfig<'_>>> {
+    match (
+        config.aur_security_provider.as_deref(),
+        config.aur_security_model.as_deref(),
+    ) {
+        (None, None) => Ok(None),
+        (Some(provider_name), Some(model)) if !provider_name.is_empty() && !model.is_empty() => {
+            Ok(Some(LocalConfig {
+                provider: parse_provider(provider_name)?,
+                model,
+            }))
+        }
+        _ => bail!(tr!(
+            "both AurSecurityProvider and AurSecurityModel must be set for local assessments"
+        )),
+    }
+}
+
+fn parse_provider(value: &str) -> Result<Provider> {
+    match value.to_ascii_lowercase().as_str() {
+        "openai" => Ok(Provider::Openai),
+        "anthropic" => Ok(Provider::Anthropic),
+        "openrouter" => Ok(Provider::Openrouter),
+        "codex" => Ok(Provider::Codex),
+        _ => bail!(tr!(
+            "unknown AUR security provider '{}'; expected openai, anthropic, openrouter, or codex",
+            value
+        )),
+    }
 }
 
 fn current_commit(config: &Config, package_base: &str) -> Result<String> {
@@ -181,11 +270,32 @@ fn current_commit(config: &Config, package_base: &str) -> Result<String> {
     Ok(commit.to_ascii_lowercase())
 }
 
+async fn lookup_remote(config: &Config, packages: &[LookupPackage]) -> Result<Vec<CheckResult>> {
+    let endpoint = config
+        .aur_security_remote_url
+        .join(LOOKUP_PATH)
+        .context(tr!("invalid AUR security API URL"))?;
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .user_agent(format!(
+            "paru/{}",
+            option_env!("PARU_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+        ))
+        .build()
+        .context(tr!("failed to create AUR security API client"))?;
+
+    let mut results = Vec::with_capacity(packages.len());
+    for chunk in packages.chunks(MAX_LOOKUPS) {
+        results.extend(lookup(&client, &endpoint, chunk).await?);
+    }
+    Ok(results)
+}
+
 async fn lookup(
     client: &reqwest::Client,
     endpoint: &Url,
     packages: &[LookupPackage],
-) -> Result<Vec<LookupResult>> {
+) -> Result<Vec<CheckResult>> {
     let response = client
         .post(endpoint.clone())
         .json(&LookupRequest { packages })
@@ -199,7 +309,22 @@ async fn lookup(
         .context(tr!("the AUR security API returned invalid JSON"))?;
 
     validate_response(packages, &response.results)?;
-    Ok(response.results)
+    Ok(response
+        .results
+        .into_iter()
+        .map(|result| CheckResult {
+            package_base: result.package_base,
+            commit: result.commit,
+            assessment: result.assessment.map(|assessment| Assessment {
+                verdict: assessment.verdict,
+                explanation: assessment.explanation,
+                provider: assessment.provider,
+                model: assessment.model,
+                version: assessment.version,
+                details_path: Some(assessment.details_path),
+            }),
+        })
+        .collect())
 }
 
 fn validate_response(packages: &[LookupPackage], results: &[LookupResult]) -> Result<()> {
@@ -216,7 +341,57 @@ fn validate_response(packages: &[LookupPackage], results: &[LookupResult]) -> Re
     Ok(())
 }
 
-fn risk_state(results: &[LookupResult], locally_unavailable: bool) -> (bool, bool) {
+fn unreviewed_results(packages: &[LookupPackage]) -> Vec<CheckResult> {
+    packages
+        .iter()
+        .map(|package| CheckResult {
+            package_base: package.package_base.clone(),
+            commit: package.commit.clone(),
+            assessment: None,
+        })
+        .collect()
+}
+
+async fn assess_locally(local: LocalConfig<'_>, package: &LookupPackage) -> Result<Assessment> {
+    let checked = check_package(
+        local.provider,
+        local.model,
+        &package.package_base,
+        &package.package_base,
+    )
+    .await
+    .with_context(|| {
+        tr!(
+            "failed to assess AUR package base '{}'",
+            package.package_base
+        )
+    })?;
+
+    if !package.commit.eq_ignore_ascii_case(&checked.commit_id) {
+        bail!(tr!(
+            "the checker assessed commit {} for '{}', but paru downloaded {}",
+            checked.commit_id,
+            package.package_base,
+            package.commit
+        ));
+    }
+
+    let (verdict, explanation) = match checked.assessment.verdict {
+        LocalVerdict::Safe => (Verdict::Safe, None),
+        LocalVerdict::Suspicious(explanation) => (Verdict::Suspicious, Some(explanation)),
+        LocalVerdict::Dangerous(explanation) => (Verdict::Dangerous, Some(explanation)),
+    };
+    Ok(Assessment {
+        verdict,
+        explanation,
+        provider: local.provider.as_str().to_string(),
+        model: local.model.to_string(),
+        version: package.version.clone(),
+        details_path: None,
+    })
+}
+
+fn risk_state(results: &[CheckResult], locally_unavailable: bool) -> (bool, bool) {
     let dangerous = results.iter().any(|result| {
         result
             .assessment
@@ -233,69 +408,153 @@ fn risk_state(results: &[LookupResult], locally_unavailable: bool) -> (bool, boo
     (has_risk, dangerous)
 }
 
-fn print_api_warning(config: &Config, error: &anyhow::Error) {
+fn safe_packages(results: &[CheckResult]) -> HashSet<String> {
+    results
+        .iter()
+        .filter(|result| {
+            result
+                .assessment
+                .as_ref()
+                .is_some_and(|assessment| assessment.verdict == Verdict::Safe)
+        })
+        .map(|result| result.package_base.clone())
+        .collect()
+}
+
+fn print_remote_warning(config: &Config, error: &anyhow::Error) {
     eprintln!(
         "{} {}: {:#}",
         config.color.warning.paint("::"),
         config
             .color
             .bold
-            .paint(tr!("could not obtain AUR security assessments")),
+            .paint(tr!("could not obtain remote AUR security assessments")),
         error
     );
 }
 
-fn print_report(config: &Config, results: &[LookupResult], unavailable: &[Unavailable]) {
-    let c = config.color;
+fn print_local_warning(config: &Config, error: &anyhow::Error) {
+    eprintln!(
+        "{} {}: {:#}",
+        config.color.warning.paint("::"),
+        config
+            .color
+            .bold
+            .paint(tr!("could not run local AUR security assessments")),
+        error
+    );
+}
+
+fn print_configuration_help(config: &Config) {
+    eprintln!(
+        "{} {}",
+        config.color.warning.paint("::"),
+        config.color.bold.paint(tr!(
+            "AUR security assessments are not configured; enable remote lookups or set both local settings in paru.conf:"
+        ))
+    );
+    eprintln!("    AurSecurityRemote");
+    eprintln!("    AurSecurityProvider = codex");
+    eprintln!("    AurSecurityModel = <model>");
+}
+
+fn print_local_start(config: &Config, count: usize, local: LocalConfig<'_>) {
+    let message = if count == 1 {
+        tr!(
+            "Starting 1 local AUR security assessment with {}/{}...",
+            clean(local.provider.as_str()),
+            clean(local.model)
+        )
+    } else {
+        tr!(
+            "Starting {} local AUR security assessments with {}/{}...",
+            count,
+            clean(local.provider.as_str()),
+            clean(local.model)
+        )
+    };
     println!(
         "{} {}",
-        c.action.paint("::"),
-        c.bold.paint(tr!("AUR security assessments:"))
+        config.color.action.paint("::"),
+        config.color.bold.paint(message)
     );
+    flush_stdout();
+}
 
-    for result in results {
-        match &result.assessment {
-            Some(assessment) => {
-                let verdict = match assessment.verdict {
-                    Verdict::Safe => c.upgrade.paint(tr!("safe")),
-                    Verdict::Suspicious => c.warning.paint(tr!("suspicious")),
-                    Verdict::Dangerous => c.error.paint(tr!("dangerous")),
-                };
-                println!(
-                    "    {} {}  {} ({}/{})",
-                    c.bold.paint(clean(&result.package_base)),
-                    clean(&assessment.version),
-                    verdict,
-                    clean(&assessment.provider),
-                    clean(&assessment.model)
-                );
-                if let Some(explanation) = &assessment.explanation {
-                    println!("        {}", indent(&clean(explanation)));
-                }
-                let details = config
-                    .aur_security_url
-                    .join(&assessment.details_path)
-                    .map_or_else(|_| clean(&assessment.details_path), |url| url.to_string());
-                println!("        {}", details);
-            }
-            None => println!(
-                "    {} {}  {} ({})",
+fn print_report_header(config: &Config) {
+    let c = config.color;
+    let heading = if config.aur_security_remote {
+        tr!("Remote AUR security assessments:")
+    } else {
+        tr!("Local AUR security assessments:")
+    };
+    println!("{} {}", c.action.paint("::"), c.bold.paint(heading));
+    flush_stdout();
+}
+
+fn print_result(config: &Config, result: &CheckResult) {
+    let c = config.color;
+    match &result.assessment {
+        Some(assessment) => {
+            let verdict = match assessment.verdict {
+                Verdict::Safe => c.upgrade.paint(tr!("safe")),
+                Verdict::Suspicious => c.warning.paint(tr!("suspicious")),
+                Verdict::Dangerous => c.error.paint(tr!("dangerous")),
+            };
+            let source = assessment_source(&config.aur_security_remote_url, assessment);
+            println!(
+                "    {} {} {}  {} ({})",
                 c.bold.paint(clean(&result.package_base)),
+                clean(&assessment.version),
                 &result.commit[..7],
-                c.warning.paint(tr!("unreviewed")),
-                tr!("no assessment for this commit")
-            ),
+                verdict,
+                clean(&source)
+            );
+            if let Some(explanation) = &assessment.explanation {
+                println!("        {}", indent(&clean(explanation)));
+            }
         }
-    }
-
-    for item in unavailable {
-        println!(
-            "    {}  {} ({:#})",
-            c.bold.paint(clean(&item.package_base)),
+        None => println!(
+            "    {} {}  {} ({})",
+            c.bold.paint(clean(&result.package_base)),
+            &result.commit[..7],
             c.warning.paint(tr!("unreviewed")),
-            item.error
-        );
+            tr!("no assessment for this commit")
+        ),
     }
+    flush_stdout();
+}
+
+fn print_unavailable(config: &Config, item: &Unavailable) {
+    let c = config.color;
+    println!(
+        "    {}  {} ({:#})",
+        c.bold.paint(clean(&item.package_base)),
+        c.warning.paint(tr!("unreviewed")),
+        item.error
+    );
+    flush_stdout();
+}
+
+fn assessment_source(remote_url: &Url, assessment: &Assessment) -> String {
+    assessment.details_path.as_ref().map_or_else(
+        || {
+            format!(
+                "{}/{}",
+                clean(&assessment.provider),
+                clean(&assessment.model)
+            )
+        },
+        |details_path| {
+            remote_url
+                .join(details_path)
+                .map_or_else(|_| clean(details_path), |url| url.to_string())
+        },
+    )
+}
+
+fn flush_stdout() {
+    let _ = io::stdout().flush();
 }
 
 fn clean(value: &str) -> String {
@@ -319,7 +578,45 @@ mod tests {
         LookupPackage {
             package_base: package_base.to_string(),
             commit: commit.to_string(),
+            version: "2.1.0-1".to_string(),
         }
+    }
+
+    fn result(verdict: Option<Verdict>) -> CheckResult {
+        CheckResult {
+            package_base: "paru".to_string(),
+            commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            assessment: verdict.map(|verdict| Assessment {
+                verdict,
+                explanation: None,
+                provider: "codex".to_string(),
+                model: "model".to_string(),
+                version: "1-1".to_string(),
+                details_path: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn displays_remote_url_or_local_provider_and_model_as_the_source() {
+        let remote_url = Url::parse("https://security.example/base").unwrap();
+        let mut assessment = result(Some(Verdict::Safe)).assessment.unwrap();
+        assert_eq!(assessment_source(&remote_url, &assessment), "codex/model");
+
+        assessment.details_path = Some("/checks/paru/commit".to_string());
+        assert_eq!(
+            assessment_source(&remote_url, &assessment),
+            "https://security.example/checks/paru/commit"
+        );
+    }
+
+    #[test]
+    fn parses_supported_providers_case_insensitively() {
+        assert_eq!(parse_provider("OpenAI").unwrap().as_str(), "openai");
+        assert_eq!(parse_provider("anthropic").unwrap().as_str(), "anthropic");
+        assert_eq!(parse_provider("openrouter").unwrap().as_str(), "openrouter");
+        assert_eq!(parse_provider("codex").unwrap().as_str(), "codex");
+        assert!(parse_provider("unknown").is_err());
     }
 
     #[test]
@@ -354,6 +651,15 @@ mod tests {
     }
 
     #[test]
+    fn serializes_only_the_remote_api_fields() {
+        let package = package("paru", "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(
+            serde_json::to_value(&package).unwrap(),
+            json!({ "package_base": "paru", "commit": package.commit })
+        );
+    }
+
+    #[test]
     fn decodes_the_public_api_contract() {
         let commit = "0123456789abcdef0123456789abcdef01234567";
         let response: LookupResponse = serde_json::from_value(json!({
@@ -382,27 +688,16 @@ mod tests {
     }
 
     #[test]
-    fn classifies_safe_unreviewed_and_dangerous_results() {
-        fn result(verdict: Option<Verdict>) -> LookupResult {
-            LookupResult {
-                package_base: "paru".to_string(),
-                commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
-                assessment: verdict.map(|verdict| Assessment {
-                    verdict,
-                    explanation: None,
-                    provider: "codex".to_string(),
-                    model: "model".to_string(),
-                    _checked_at: 1,
-                    version: "1-1".to_string(),
-                    details_path: "/checks/paru/commit".to_string(),
-                }),
-            }
-        }
-
+    fn classifies_safe_unreviewed_dangerous_and_unavailable_results() {
         assert_eq!(
             risk_state(&[result(Some(Verdict::Safe))], false),
             (false, false)
         );
+        assert_eq!(
+            safe_packages(&[result(Some(Verdict::Safe))]),
+            HashSet::from(["paru".to_string()])
+        );
+        assert!(safe_packages(&[result(Some(Verdict::Suspicious))]).is_empty());
         assert_eq!(risk_state(&[result(None)], false), (true, false));
         assert_eq!(
             risk_state(&[result(Some(Verdict::Dangerous))], false),

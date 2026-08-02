@@ -38,7 +38,7 @@ pub fn help() {
     );
     printtr!("    --aururl    <url>      Set an alternative AUR URL");
     printtr!("    --aurrpcur  <url>      Set an alternative URL for the AUR /rpc endpoint");
-    printtr!("    --aursecurityurl <url> Set an alternative AUR security API URL");
+    printtr!("    --aursecurityremoteurl <url> Set an alternative remote security URL");
     printtr!("    --clonedir  <dir>      Directory used to download and run PKGBUILDs");
     println!();
     printtr!("    --makepkg   <file>     makepkg command to use");
@@ -64,6 +64,8 @@ pub fn help() {
     println!();
     printtr!("    --skipreview           Skip the review process");
     printtr!("    --review               Don't skip the review process");
+    printtr!("    --skipreviewsafe       Skip review for safely assessed AUR packages");
+    printtr!("    --reviewsafe           Review safely assessed AUR packages");
     printtr!("    --skipaursecurity      Skip AUR security assessments");
     printtr!("    --aursecurity          Enable AUR security assessments");
     printtr!("    --[no]upgrademenu      Show interactive menu to skip upgrades");

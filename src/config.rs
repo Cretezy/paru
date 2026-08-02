@@ -410,7 +410,10 @@ pub struct Config {
     #[default(Url::parse("https://archlinux.org").unwrap())]
     pub arch_url: Url,
     #[default(Url::parse("https://aur-security.cretezy.com").unwrap())]
-    pub aur_security_url: Url,
+    pub aur_security_remote_url: Url,
+    pub aur_security_remote: bool,
+    pub aur_security_provider: Option<String>,
+    pub aur_security_model: Option<String>,
     pub build_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub state_dir: PathBuf,
@@ -447,6 +450,7 @@ pub struct Config {
     pub version: bool,
 
     pub skip_review: bool,
+    pub skip_review_safe: bool,
     pub skip_aur_security: bool,
     pub no_check: bool,
     pub no_confirm: bool,
@@ -1043,7 +1047,9 @@ then initialise it with:
 
         match key {
             "SkipReview" => self.skip_review = true,
+            "SkipReviewSafe" => self.skip_review_safe = true,
             "SkipAurSecurity" => self.skip_aur_security = true,
+            "AurSecurityRemote" => self.aur_security_remote = true,
             "BottomUp" => self.sort_mode = SortMode::BottomUp,
             "AurOnly" => self.mode = Mode::AUR,
             "PkgbuildsOnly" => self.mode = Mode::PKGBUILD,
@@ -1112,7 +1118,11 @@ then initialise it with:
             }
             "AurUrl" => self.aur_url = value?.parse()?,
             "AurRpcUrl" => self.aur_rpc_url = Some(value?.parse()?),
-            "AurSecurityUrl" => self.aur_security_url = value?.parse()?,
+            "AurSecurityRemoteUrl" | "AurSecurityUrl" => {
+                self.aur_security_remote_url = value?.parse()?
+            }
+            "AurSecurityProvider" => self.aur_security_provider = Some(value?),
+            "AurSecurityModel" => self.aur_security_model = Some(value?),
             "BuildDir" | "CloneDir" => self.build_dir = PathBuf::from(value?),
             "Redownload" => self.redownload = ConfigEnum::from_str(key, value?.as_str())?,
             "Rebuild" => self.rebuild = ConfigEnum::from_str(key, value?.as_str())?,

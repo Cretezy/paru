@@ -274,17 +274,44 @@ This option disables that behavior, keeping the both all versions and only updat
 Skip the review process.
 
 .TP
-.B AurSecurityUrl = URL
-Set the base URL for the AUR security assessment service. The default is
-https://aur-security.cretezy.com. Paru queries the service after downloading
-an AUR package repository and before running pre-build commands or builds.
-Suspicious, dangerous, and unreviewed commits require interactive confirmation.
-With --noconfirm, only a dangerous assessment aborts the transaction. Service
-errors produce a warning and do not prevent installation.
+.B SkipReviewSafe
+Skip manual PKGBUILD review for AUR package bases that receive a safe remote or
+local security assessment. Packages with suspicious, dangerous, unreviewed, or
+failed assessments are still reviewed.
+
+.TP
+.B AurSecurityRemote
+Enable lookups from the remote AUR security service. Remote lookups run before
+local assessments. When a commit has no remote assessment, or the service is
+unavailable, paru falls back to local assessment if it is configured.
+
+.TP
+.B AurSecurityRemoteUrl = URL
+Set the remote AUR security service base URL. The default is
+https://aur-security.cretezy.com. This option only takes effect when
+AurSecurityRemote is enabled.
+
+.TP
+.B AurSecurityProvider = provider
+Set the AI provider used for local AUR package assessments. Supported providers
+are openai, anthropic, openrouter, and codex.
+
+.TP
+.B AurSecurityModel = model
+Set the model used for local AUR package assessments. Both AurSecurityProvider
+and AurSecurityModel must be configured to enable local assessments. API
+providers require their corresponding credential environment variable; codex
+requires an installed and authenticated Codex CLI.
+
+Paru runs assessments after downloading AUR package repositories and before
+running pre-build commands or builds. Suspicious, dangerous, unreviewed, and
+failed assessments require interactive confirmation. With --noconfirm, only a
+dangerous assessment aborts the transaction. Assessment errors produce a
+warning and do not prevent installation.
 
 .TP
 .B SkipAurSecurity
-Disable AUR security assessment lookups.
+Disable remote and local AUR security assessments.
 
 .SH BIN
 Options belonging to the [bin] section.
