@@ -273,6 +273,27 @@ This option disables that behavior, keeping the both all versions and only updat
 .B SkipReview
 Skip the review process.
 
+.TP
+.B AurSecurityProvider = provider
+Set the AI provider used to assess AUR packages. Supported providers are
+openai, anthropic, openrouter, and codex.
+
+.TP
+.B AurSecurityModel = model
+Set the model used to assess AUR packages. Both AurSecurityProvider and
+AurSecurityModel must be configured to enable assessments. Paru prints setup
+instructions when either setting is absent. API providers require their
+corresponding credential environment variable; codex requires an installed and
+authenticated Codex CLI. Paru runs assessments after downloading AUR package
+repositories and before running pre-build commands or builds. Suspicious,
+dangerous, and failed assessments require interactive confirmation. With
+--noconfirm, only a dangerous assessment aborts the transaction. Checker errors
+produce a warning and do not prevent installation.
+
+.TP
+.B SkipAurSecurity
+Disable AUR security assessments.
+
 .SH BIN
 Options belonging to the [bin] section.
 

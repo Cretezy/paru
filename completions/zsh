@@ -122,6 +122,8 @@ _pacman_opts_common=(
 
 	'--skipreview[Skip the review process]'
 	"--review[Don't skip the review process]"
+	'--skipaursecurity[Skip AUR security assessments]'
+	'--aursecurity[Enable AUR security assessments]'
 )
 
 # options for passing to _arguments: options for --upgrade commands

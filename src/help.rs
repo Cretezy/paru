@@ -63,6 +63,8 @@ pub fn help() {
     println!();
     printtr!("    --skipreview           Skip the review process");
     printtr!("    --review               Don't skip the review process");
+    printtr!("    --skipaursecurity      Skip AUR security assessments");
+    printtr!("    --aursecurity          Enable AUR security assessments");
     printtr!("    --[no]upgrademenu      Show interactive menu to skip upgrades");
     printtr!("    --[no]removemake       Remove makedepends after install");
     printtr!("    --[no]cleanafter       Remove package sources after install");

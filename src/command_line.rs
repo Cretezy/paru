@@ -257,6 +257,8 @@ impl Config {
             Arg::Long("interactive") => self.interactive = true,
             Arg::Long("skipreview") => self.skip_review = true,
             Arg::Long("review") => self.skip_review = false,
+            Arg::Long("skipaursecurity") => self.skip_aur_security = true,
+            Arg::Long("aursecurity") => self.skip_aur_security = false,
             Arg::Long("gendb") => self.gendb = true,
             Arg::Long("nocheck") => self.no_check = true,
             Arg::Long("devel") => self.devel = true,
