@@ -304,10 +304,12 @@ providers require their corresponding credential environment variable; codex
 requires an installed and authenticated Codex CLI.
 
 Paru runs assessments after downloading AUR package repositories and before
-running pre-build commands or builds. Suspicious, dangerous, unreviewed, and
-failed assessments require interactive confirmation. With --noconfirm, only a
-dangerous assessment aborts the transaction. Assessment errors produce a
-warning and do not prevent installation.
+running pre-build commands or builds. Local assessments run concurrently using
+the ParallelDownloads limit from pacman.conf and are printed as they complete.
+Suspicious, dangerous, unreviewed, and failed assessments require interactive
+confirmation. With --noconfirm, only a dangerous assessment aborts the
+transaction. Assessment errors produce a warning and do not prevent
+installation.
 
 .TP
 .B SkipAurSecurity

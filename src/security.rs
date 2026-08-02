@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use aur_ai_security_checker::{check_package, Provider, Verdict as LocalVerdict};
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tr::tr;
 use url::Url;
@@ -160,12 +161,17 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
         if !pending.is_empty() {
             print_local_start(config, pending.len(), local);
         }
-        for mut result in pending {
+        let assessments = pending.into_iter().map(|result| {
             let package = packages
                 .iter()
                 .find(|package| package.package_base == result.package_base)
                 .expect("lookup results were validated against requested packages");
-            match assess_locally(local, package).await {
+            async move { (result, assess_locally(local, package).await) }
+        });
+        let mut assessments =
+            stream::iter(assessments).buffer_unordered(local_assessment_parallelism(config));
+        while let Some((mut result, assessment)) = assessments.next().await {
+            match assessment {
                 Ok(assessment) => {
                     result.assessment = Some(assessment);
                     print_result(config, &result);
@@ -215,6 +221,12 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
     }
 
     Ok(SecurityDecision::Continue(safe_packages))
+}
+
+fn local_assessment_parallelism(config: &Config) -> usize {
+    usize::try_from(config.pacman.parallel_downloads)
+        .unwrap_or(usize::MAX)
+        .max(1)
 }
 
 fn local_config(config: &Config) -> Result<Option<LocalConfig<'_>>> {
