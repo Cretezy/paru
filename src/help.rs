@@ -64,8 +64,8 @@ pub fn help() {
     println!();
     printtr!("    --skipreview           Skip the review process");
     printtr!("    --review               Don't skip the review process");
-    printtr!("    --skipreviewsafe       Skip review for safely assessed AUR packages");
-    printtr!("    --reviewsafe           Review safely assessed AUR packages");
+    printtr!("    --skipsafereviews      Skip review for safely assessed AUR packages");
+    printtr!("    --safereviews          Review safely assessed AUR packages");
     printtr!("    --skipaursecurity      Skip AUR security assessments");
     printtr!("    --aursecurity          Enable AUR security assessments");
     printtr!("    --[no]upgrademenu      Show interactive menu to skip upgrades");

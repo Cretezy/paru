@@ -263,7 +263,7 @@ complete -c $progname -n "not $noopt" -l localrepo -d 'Build packages in a local
 complete -c $progname -n "not $noopt" -l nolocalrepo -d "Don't build packages in a local repo" -f
 complete -c $progname -n "not $noopt" -l skipreview -d 'Skip the review process' -f
 complete -c $progname -n "not $noopt" -l review -d "Don't skip the review process" -f
-complete -c $progname -n "not $noopt" -l skipreviewsafe -d 'Skip review for safely assessed AUR packages' -f
-complete -c $progname -n "not $noopt" -l reviewsafe -d 'Review safely assessed AUR packages' -f
+complete -c $progname -n "not $noopt" -l skipsafereviews -d 'Skip review for safely assessed AUR packages' -f
+complete -c $progname -n "not $noopt" -l safereviews -d 'Review safely assessed AUR packages' -f
 complete -c $progname -n "not $noopt" -l skipaursecurity -d 'Skip AUR security assessments' -f
 complete -c $progname -n "not $noopt" -l aursecurity -d 'Enable AUR security assessments' -f

@@ -1122,7 +1122,7 @@ impl Installer {
         };
 
         if !config.skip_review
-            && !config.skip_review_safe
+            && !config.skip_safe_reviews
             && actions.iter_aur_pkgs().next().is_some()
         {
             if !ask(config, &tr!("Proceed to review?"), true) {
@@ -1176,7 +1176,7 @@ impl Installer {
                     Base::Pkgbuild(_) => None,
                 })
                 .filter(|package_base| {
-                    !config.skip_review_safe || !safe_packages.contains(*package_base)
+                    !config.skip_safe_reviews || !safe_packages.contains(*package_base)
                 })
                 .collect::<Vec<_>>();
             review(config, &config.fetch, &pkgs)?;

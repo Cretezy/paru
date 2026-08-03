@@ -123,8 +123,8 @@ _pacman_opts_common=(
 
 	'--skipreview[Skip the review process]'
 	"--review[Don't skip the review process]"
-	'--skipreviewsafe[Skip review for safely assessed AUR packages]'
-	'--reviewsafe[Review safely assessed AUR packages]'
+	'--skipsafereviews[Skip review for safely assessed AUR packages]'
+	'--safereviews[Review safely assessed AUR packages]'
 	'--skipaursecurity[Skip AUR security assessments]'
 	'--aursecurity[Enable AUR security assessments]'
 )

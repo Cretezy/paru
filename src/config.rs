@@ -450,7 +450,7 @@ pub struct Config {
     pub version: bool,
 
     pub skip_review: bool,
-    pub skip_review_safe: bool,
+    pub skip_safe_reviews: bool,
     pub skip_aur_security: bool,
     pub no_check: bool,
     pub no_confirm: bool,
@@ -1047,7 +1047,7 @@ then initialise it with:
 
         match key {
             "SkipReview" => self.skip_review = true,
-            "SkipReviewSafe" => self.skip_review_safe = true,
+            "SkipSafeReviews" | "SkipReviewSafe" => self.skip_safe_reviews = true,
             "SkipAurSecurity" => self.skip_aur_security = true,
             "AurSecurityRemote" => self.aur_security_remote = true,
             "BottomUp" => self.sort_mode = SortMode::BottomUp,

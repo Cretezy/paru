@@ -260,8 +260,10 @@ impl Config {
             Arg::Long("interactive") => self.interactive = true,
             Arg::Long("skipreview") => self.skip_review = true,
             Arg::Long("review") => self.skip_review = false,
-            Arg::Long("skipreviewsafe") => self.skip_review_safe = true,
-            Arg::Long("reviewsafe") => self.skip_review_safe = false,
+            Arg::Long("skipsafereviews") | Arg::Long("skipreviewsafe") => {
+                self.skip_safe_reviews = true
+            }
+            Arg::Long("safereviews") | Arg::Long("reviewsafe") => self.skip_safe_reviews = false,
             Arg::Long("skipaursecurity") => self.skip_aur_security = true,
             Arg::Long("aursecurity") => self.skip_aur_security = false,
             Arg::Long("gendb") => self.gendb = true,
