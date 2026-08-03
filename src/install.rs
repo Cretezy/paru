@@ -1099,8 +1099,19 @@ impl Installer {
             return Ok(());
         }
 
+        let bases = actions.iter_aur_pkgs().cloned().collect();
+        let security_report = if actions.build.is_empty() {
+            Default::default()
+        } else {
+            self.download_pkgbuilds(config, &bases).await?;
+            match security::check(config, &bases).await? {
+                SecurityDecision::Continue(report) => report,
+                SecurityDecision::Abort => return Status::err(1),
+            }
+        };
+
         if config.pacman.verbose_pkg_lists {
-            print_install_verbose(config, actions, &self.upgrades.devel);
+            print_install_verbose(config, actions, &self.upgrades.devel, &security_report);
         } else {
             print_install(config, actions, &self.upgrades.devel);
         }
@@ -1121,55 +1132,73 @@ impl Installer {
             false
         };
 
-        if !config.skip_review
-            && !config.skip_safe_reviews
-            && actions.iter_aur_pkgs().next().is_some()
-        {
-            if !ask(config, &tr!("Proceed to review?"), true) {
+        if actions.build.is_empty() {
+            if !ask(config, &tr!("Proceed with installation?"), true) {
                 return Status::err(1);
             }
-        } else if !ask(config, &tr!("Proceed with installation?"), true) {
-            return Status::err(1);
-        }
-
-        if actions.build.is_empty() {
             if !config.chroot {
                 repo_install(config, &actions.install, &self.conflicts)?;
             }
             return Ok(());
         }
 
-        let bases = actions.iter_aur_pkgs().cloned().collect();
-        self.download_pkgbuilds(config, &bases).await?;
+        let review_candidates = actions
+            .build
+            .iter()
+            .filter(|base| base.build())
+            .filter_map(|base| match base {
+                Base::Aur(package) => Some(package.package_base()),
+                Base::Pkgbuild(_) => None,
+            })
+            .collect::<Vec<_>>();
 
-        let safe_packages = match security::check(config, &bases).await? {
-            SecurityDecision::Continue(safe_packages) => safe_packages,
-            SecurityDecision::Abort => return Status::err(1),
-        };
+        let (review_packages, accepted_safe_packages) =
+            if config.skip_review || review_candidates.is_empty() {
+                if !ask(config, &tr!("Proceed with installation?"), true) {
+                    return Status::err(1);
+                }
+                let accepted = review_candidates
+                    .iter()
+                    .copied()
+                    .filter(|package_base| security_report.is_safe(package_base))
+                    .collect::<Vec<_>>();
+                (Vec::new(), accepted)
+            } else {
+                let safe_count = review_candidates
+                    .iter()
+                    .filter(|package_base| security_report.is_safe(package_base))
+                    .count();
+                let skip_safe = if safe_count == 0 {
+                    if !ask(config, &tr!("Proceed to review?"), true) {
+                        return Status::err(1);
+                    }
+                    false
+                } else {
+                    let question = if safe_count == review_candidates.len() {
+                        tr!("Skip PKGBUILD review?")
+                    } else {
+                        tr!("Skip safely assessed packages?")
+                    };
+                    ask(config, &question, config.skip_safe_reviews)
+                };
 
-        let review_packages = if config.skip_review {
-            Vec::new()
-        } else {
-            actions
-                .build
-                .iter()
-                .filter(|b| b.build())
-                .filter_map(|b| match b {
-                    Base::Aur(pkg) => Some(pkg.package_base()),
-                    Base::Pkgbuild(_) => None,
-                })
-                .filter(|package_base| {
-                    !config.skip_safe_reviews || !safe_packages.contains(*package_base)
-                })
-                .collect::<Vec<_>>()
-        };
+                let accepted = if skip_safe {
+                    review_candidates
+                        .iter()
+                        .copied()
+                        .filter(|package_base| security_report.is_safe(package_base))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let review_packages = review_candidates
+                    .into_iter()
+                    .filter(|package_base| !skip_safe || !security_report.is_safe(package_base))
+                    .collect::<Vec<_>>();
+                (review_packages, accepted)
+            };
 
-        if config.skip_safe_reviews
-            && !review_packages.is_empty()
-            && !ask(config, &tr!("Proceed to review?"), true)
-        {
-            return Status::err(1);
-        }
+        config.fetch.mark_seen(&accepted_safe_packages)?;
 
         for pkg in &actions.build {
             match pkg {

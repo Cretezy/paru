@@ -27,7 +27,7 @@ srcinfo = "2.1.0"
 
 ansiterm = "0.12.2"
 anyhow = { version = "1.0.100", features = ["backtrace"] }
-aur_ai_security_checker = { git = "https://github.com/Cretezy/aur_ai_security", rev = "81819057499fa5c2be0a26b94014a8a41ec85071" }
+aur_ai_security_checker = { git = "https://github.com/Cretezy/aur-security", rev = "0bb19ad053db06c903f0e92850661ee0afa9d8e4" }
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 dirs = "6.0.0"
 futures = "0.3.31"

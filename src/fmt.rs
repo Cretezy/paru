@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::config::Config;
 use crate::repo;
+use crate::security::{SecurityReport, SecurityStatus};
 
 use alpm::Ver;
 use aur_depends::{Actions, Base};
@@ -311,7 +312,12 @@ fn old_ver<'a>(config: &'a Config, pkg: &str) -> Option<&'a Ver> {
         .map(|p| p.version())
 }
 
-pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet<String>) {
+pub fn print_install_verbose(
+    config: &Config,
+    actions: &Actions,
+    devel: &HashSet<String>,
+    security: &SecurityReport,
+) {
     let c = config.color;
     let bold = c.bold;
     let db = config.alpm.localdb();
@@ -327,6 +333,7 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
     let old = tr!("Old Version");
     let new = tr!("New Version");
     let make = tr!("Make Only");
+    let security_heading = tr!("Security");
     let yes = tr!("Yes");
     let no = tr!("No");
 
@@ -357,6 +364,17 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
     let new_len = new_len.max("latest-commit".len());
 
     let make_len = yes.width().max(no.width()).max(make.width());
+    let security_len = [
+        tr!("safe"),
+        tr!("suspicious"),
+        tr!("dangerous"),
+        tr!("unreviewed"),
+        security_heading.clone(),
+    ]
+    .iter()
+    .map(|status| status.width())
+    .max()
+    .unwrap_or_default();
 
     let aur_len = actions
         .build
@@ -412,7 +430,12 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
     let new_len = new_len.max(aur_new_len);
 
     if let Some(cols) = config.cols {
-        if package_len + 2 + old_len + 2 + new_len + 2 + make_len > cols {
+        let security_width = if actions.build.is_empty() {
+            0
+        } else {
+            2 + security_len
+        };
+        if package_len + 2 + old_len + 2 + new_len + 2 + make_len + security_width > cols {
             eprintln!(
                 "{} {}",
                 c.warning.paint("::"),
@@ -466,7 +489,7 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
     if !actions.build.is_empty() {
         println!();
         println!(
-            "{}{:<package_len$}  {}{:<old_len$}  {}{:<new_len$}  {}",
+            "{}{:<package_len$}  {}{:<old_len$}  {}{:<new_len$}  {}  {}",
             bold.paint(&aur),
             "",
             bold.paint(&old),
@@ -474,6 +497,7 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
             bold.paint(&new),
             "",
             bold.paint(&make),
+            bold.paint(&security_heading),
             package_len = package_len - aur.width(),
             old_len = old_len - old.width(),
             new_len = new_len - new.width(),
@@ -489,13 +513,15 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
                             &pkg.pkg.version
                         };
                         println!(
-                            "{:<package_len$}  {:<old_len$}  {:<new_len$}  {}",
+                            "{:<package_len$}  {:<old_len$}  {:<new_len$}  {:<make_len$}  {}",
                             format!("{}/{}", repo(config, &pkg.pkg.name), pkg.pkg.name),
                             old_ver(config, &pkg.pkg.name)
                                 .map(|v| v.as_str())
                                 .unwrap_or_default(),
                             ver,
-                            if pkg.make { &yes } else { &no }
+                            if pkg.make { &yes } else { &no },
+                            security_status(config, security, base.package_base()),
+                            make_len = make_len,
                         );
                     }
                 }
@@ -508,13 +534,14 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
                             &ver
                         };
                         println!(
-                            "{:<package_len$}  {:<old_len$}  {:<new_len$}  {}",
+                            "{:<package_len$}  {:<old_len$}  {:<new_len$}  {:<make_len$}  -",
                             format!("{}/{}", base.repo, pkg.pkg.pkgname),
                             old_ver(config, &pkg.pkg.pkgname)
                                 .map(|v| v.as_str())
                                 .unwrap_or_default(),
                             ver,
-                            if pkg.make { &yes } else { &no }
+                            if pkg.make { &yes } else { &no },
+                            make_len = make_len,
                         );
                     }
                 }
@@ -523,4 +550,18 @@ pub fn print_install_verbose(config: &Config, actions: &Actions, devel: &HashSet
     }
 
     println!();
+}
+
+fn security_status(config: &Config, report: &SecurityReport, package_base: &str) -> String {
+    match report.status(package_base) {
+        Some(SecurityStatus::Safe) => config.color.upgrade.paint(tr!("safe")).to_string(),
+        Some(SecurityStatus::Suspicious) => {
+            config.color.warning.paint(tr!("suspicious")).to_string()
+        }
+        Some(SecurityStatus::Dangerous) => config.color.error.paint(tr!("dangerous")).to_string(),
+        Some(SecurityStatus::Unreviewed) => {
+            config.color.warning.paint(tr!("unreviewed")).to_string()
+        }
+        None => "-".to_string(),
+    }
 }

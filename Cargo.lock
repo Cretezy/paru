@@ -219,7 +219,7 @@ dependencies = [
 [[package]]
 name = "aur_ai_security_checker"
 version = "0.1.0"
-source = "git+https://github.com/Cretezy/aur_ai_security?rev=81819057499fa5c2be0a26b94014a8a41ec85071#81819057499fa5c2be0a26b94014a8a41ec85071"
+source = "git+https://github.com/Cretezy/aur-security?rev=0bb19ad053db06c903f0e92850661ee0afa9d8e4#0bb19ad053db06c903f0e92850661ee0afa9d8e4"
 dependencies = [
  "anyhow",
  "git2",

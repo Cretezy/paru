@@ -275,15 +275,19 @@ Skip the review process.
 
 .TP
 .B SkipSafeReviews
-Skip manual PKGBUILD review for AUR package bases that receive a safe remote or
-local security assessment. Packages with suspicious, dangerous, unreviewed, or
-failed assessments are still reviewed.
+Default to skipping manual PKGBUILD review for AUR package bases that receive a
+safe remote or local security assessment. The interactive review prompt can
+still include them. Packages with suspicious, dangerous, unreviewed, or failed
+assessments are never excluded by this option. Skipped safe packages are marked
+as accepted so their commit becomes the baseline for the next assessment.
 
 .TP
 .B AurSecurityRemote
-Enable lookups from the remote AUR security service. Remote lookups run before
-local assessments. When a commit has no remote assessment, or the service is
-unavailable, paru falls back to local assessment if it is configured.
+Enable lookups from the remote AUR security service. Paru looks up every
+upstream commit after its accepted AUR_SEEN baseline through the commit being
+installed. A package is safe only when the whole range is assessed and safe.
+When any commit has no remote assessment, or the service is unavailable, paru
+falls back to one cumulative local assessment if it is configured.
 
 .TP
 .B AurSecurityRemoteUrl = URL
@@ -294,22 +298,24 @@ AurSecurityRemote is enabled.
 .TP
 .B AurSecurityProvider = provider
 Set the AI provider used for local AUR package assessments. Supported providers
-are openai, anthropic, openrouter, and codex.
+are openai, anthropic, openrouter, claude, and codex.
 
 .TP
 .B AurSecurityModel = model
 Set the model used for local AUR package assessments. Both AurSecurityProvider
 and AurSecurityModel must be configured to enable local assessments. API
-providers require their corresponding credential environment variable; codex
-requires an installed and authenticated Codex CLI.
+providers require their corresponding credential environment variable; claude
+and codex require their corresponding installed and authenticated CLI.
 
 Paru runs assessments after downloading AUR package repositories and before
-running pre-build commands or builds. Local assessments run concurrently using
-the ParallelDownloads limit from pacman.conf and are printed as they complete.
-When SkipSafeReviews is enabled, suspicious, dangerous, unreviewed, and failed
-assessments enter the normal PKGBUILD review flow instead of being treated as a
-separate security warning. With --noconfirm, a dangerous assessment aborts the
-transaction. Assessment errors produce a warning and do not prevent
+printing the transaction table, which includes each AUR package's security
+status when verbose package lists are enabled. Local assessments compare the
+accepted AUR_SEEN tree with the current build tree and run concurrently using
+the ParallelDownloads limit from pacman.conf. Paru prints one aggregate result
+per package. Before review, paru asks whether safely assessed packages should
+be skipped; suspicious, dangerous, unreviewed, and failed assessments remain in
+the normal PKGBUILD review flow. With --noconfirm, a dangerous assessment
+aborts the transaction. Assessment errors produce a warning and do not prevent
 installation.
 
 .TP
