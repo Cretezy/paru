@@ -1147,6 +1147,30 @@ impl Installer {
             SecurityDecision::Abort => return Status::err(1),
         };
 
+        let review_packages = if config.skip_review {
+            Vec::new()
+        } else {
+            actions
+                .build
+                .iter()
+                .filter(|b| b.build())
+                .filter_map(|b| match b {
+                    Base::Aur(pkg) => Some(pkg.package_base()),
+                    Base::Pkgbuild(_) => None,
+                })
+                .filter(|package_base| {
+                    !config.skip_safe_reviews || !safe_packages.contains(*package_base)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if config.skip_safe_reviews
+            && !review_packages.is_empty()
+            && !ask(config, &tr!("Proceed to review?"), true)
+        {
+            return Status::err(1);
+        }
+
         for pkg in &actions.build {
             match pkg {
                 Base::Aur(base) => {
@@ -1166,21 +1190,7 @@ impl Installer {
             }
         }
 
-        if !config.skip_review {
-            let pkgs = actions
-                .build
-                .iter()
-                .filter(|b| b.build())
-                .filter_map(|b| match b {
-                    Base::Aur(pkg) => Some(pkg.package_base()),
-                    Base::Pkgbuild(_) => None,
-                })
-                .filter(|package_base| {
-                    !config.skip_safe_reviews || !safe_packages.contains(*package_base)
-                })
-                .collect::<Vec<_>>();
-            review(config, &config.fetch, &pkgs)?;
-        }
+        review(config, &config.fetch, &review_packages)?;
 
         let arch = config
             .alpm

@@ -306,8 +306,9 @@ requires an installed and authenticated Codex CLI.
 Paru runs assessments after downloading AUR package repositories and before
 running pre-build commands or builds. Local assessments run concurrently using
 the ParallelDownloads limit from pacman.conf and are printed as they complete.
-Suspicious, dangerous, unreviewed, and failed assessments require interactive
-confirmation. With --noconfirm, only a dangerous assessment aborts the
+When SkipSafeReviews is enabled, suspicious, dangerous, unreviewed, and failed
+assessments enter the normal PKGBUILD review flow instead of being treated as a
+separate security warning. With --noconfirm, a dangerous assessment aborts the
 transaction. Assessment errors produce a warning and do not prevent
 installation.
 

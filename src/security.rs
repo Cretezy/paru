@@ -13,7 +13,6 @@ use url::Url;
 use crate::config::Config;
 use crate::download::Bases;
 use crate::exec;
-use crate::util::ask;
 
 const LOOKUP_PATH: &str = "/api/v1/checks/lookup";
 const MAX_LOOKUPS: usize = 1000;
@@ -195,28 +194,14 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
     }
 
     let safe_packages = safe_packages(&results);
-    let (has_risk, dangerous) = risk_state(&results, !unavailable.is_empty());
-    if config.no_confirm {
-        if dangerous {
-            eprintln!(
-                "{} {}",
-                config.color.error.paint("::"),
-                config.color.bold.paint(tr!(
-                    "aborting unattended installation due to a dangerous AUR security assessment"
-                ))
-            );
-            return Ok(SecurityDecision::Abort);
-        }
-        return Ok(SecurityDecision::Continue(safe_packages));
-    }
-
-    if has_risk
-        && !ask(
-            config,
-            &tr!("Proceed despite AUR security warnings?"),
-            false,
-        )
-    {
+    if config.no_confirm && has_dangerous_assessment(&results) {
+        eprintln!(
+            "{} {}",
+            config.color.error.paint("::"),
+            config.color.bold.paint(tr!(
+                "aborting unattended installation due to a dangerous AUR security assessment"
+            ))
+        );
         return Ok(SecurityDecision::Abort);
     }
 
@@ -403,21 +388,13 @@ async fn assess_locally(local: LocalConfig<'_>, package: &LookupPackage) -> Resu
     })
 }
 
-fn risk_state(results: &[CheckResult], locally_unavailable: bool) -> (bool, bool) {
-    let dangerous = results.iter().any(|result| {
+fn has_dangerous_assessment(results: &[CheckResult]) -> bool {
+    results.iter().any(|result| {
         result
             .assessment
             .as_ref()
             .is_some_and(|assessment| assessment.verdict == Verdict::Dangerous)
-    });
-    let has_risk = locally_unavailable
-        || results.iter().any(|result| {
-            result
-                .assessment
-                .as_ref()
-                .is_none_or(|assessment| assessment.verdict != Verdict::Safe)
-        });
-    (has_risk, dangerous)
+    })
 }
 
 fn safe_packages(results: &[CheckResult]) -> HashSet<String> {
@@ -700,24 +677,16 @@ mod tests {
     }
 
     #[test]
-    fn classifies_safe_unreviewed_dangerous_and_unavailable_results() {
-        assert_eq!(
-            risk_state(&[result(Some(Verdict::Safe))], false),
-            (false, false)
-        );
+    fn classifies_safe_and_dangerous_results() {
+        assert!(!has_dangerous_assessment(&[result(Some(Verdict::Safe))]));
         assert_eq!(
             safe_packages(&[result(Some(Verdict::Safe))]),
             HashSet::from(["paru".to_string()])
         );
         assert!(safe_packages(&[result(Some(Verdict::Suspicious))]).is_empty());
-        assert_eq!(risk_state(&[result(None)], false), (true, false));
-        assert_eq!(
-            risk_state(&[result(Some(Verdict::Dangerous))], false),
-            (true, true)
-        );
-        assert_eq!(
-            risk_state(&[result(Some(Verdict::Safe))], true),
-            (true, false)
-        );
+        assert!(!has_dangerous_assessment(&[result(None)]));
+        assert!(has_dangerous_assessment(&[result(Some(
+            Verdict::Dangerous
+        ))]));
     }
 }
