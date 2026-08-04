@@ -219,7 +219,7 @@ dependencies = [
 [[package]]
 name = "aur_security_checker"
 version = "0.1.0"
-source = "git+https://github.com/Cretezy/aur-security?rev=f76e4f8be74a#f76e4f8be74a51586ae8ad55f25e3a34f5d2803b"
+source = "git+https://github.com/Cretezy/aur-security?rev=ee7f22b45f8b#ee7f22b45f8b92fea5b232f6b07ff1e0ee7a5bac"
 dependencies = [
  "anyhow",
  "aur_security_protocol",
@@ -237,7 +237,7 @@ dependencies = [
 [[package]]
 name = "aur_security_protocol"
 version = "0.1.0"
-source = "git+https://github.com/Cretezy/aur-security?rev=f76e4f8be74a#f76e4f8be74a51586ae8ad55f25e3a34f5d2803b"
+source = "git+https://github.com/Cretezy/aur-security?rev=ee7f22b45f8b#ee7f22b45f8b92fea5b232f6b07ff1e0ee7a5bac"
 dependencies = [
  "serde",
 ]
