@@ -1,22 +1,19 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::Command;
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use aur_ai_security_checker::{check_repository, Provider, Verdict as LocalVerdict};
+use aur_security_checker::{
+    check_repository, lookup, LookupCommitResult, LookupPackage as LookupWirePackage,
+    LookupRequest, Provider, Verdict as LocalVerdict,
+};
 use futures::{stream, StreamExt};
-use serde::{Deserialize, Serialize};
 use tr::tr;
 use url::Url;
 
 use crate::config::Config;
 use crate::download::Bases;
 use crate::exec;
-
-const LOOKUP_PATH: &str = "/api/v1/checks/lookup";
-const MAX_LOOKUPS: usize = 1000;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum SecurityDecision {
@@ -75,49 +72,7 @@ struct LookupPackage {
     baseline: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-struct LookupWirePackage {
-    package_base: String,
-    commits: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct LookupRequest<'a> {
-    packages: &'a [LookupWirePackage],
-}
-
-#[derive(Debug, Deserialize)]
-struct LookupResponse {
-    results: Vec<LookupResult>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LookupResult {
-    package_base: String,
-    commits: Vec<LookupCommitResult>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LookupCommitResult {
-    commit: String,
-    assessment: Option<RemoteAssessment>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteAssessment {
-    verdict: Verdict,
-    explanation: Option<String>,
-    provider: String,
-    model: String,
-    #[serde(rename = "checked_at")]
-    _checked_at: i64,
-    #[serde(rename = "version")]
-    _version: String,
-    details_path: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Verdict {
     Safe,
     Suspicious,
@@ -421,115 +376,47 @@ fn validate_commit(package_base: &str, commit: &str) -> Result<String> {
 }
 
 async fn lookup_remote(config: &Config, packages: &[LookupPackage]) -> Result<Vec<PackageResult>> {
-    let endpoint = config
-        .aur_security_remote_url
-        .join(LOOKUP_PATH)
-        .context(tr!("invalid AUR security API URL"))?;
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent(format!(
-            "paru/{}",
-            option_env!("PARU_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
-        ))
-        .build()
-        .context(tr!("failed to create AUR security API client"))?;
+    let response = lookup(
+        config.aur_security_remote_url.as_str(),
+        &LookupRequest {
+            packages: packages
+                .iter()
+                .map(|package| LookupWirePackage {
+                    package_base: package.package_base.clone(),
+                    commits: package.commits.clone(),
+                })
+                .collect(),
+        },
+    )
+    .await
+    .context(tr!("could not fetch remote AUR security assessments"))?;
 
-    let mut matches = HashMap::<String, Vec<LookupCommitResult>>::new();
-    for batch in lookup_batches(packages) {
-        for result in lookup(&client, &endpoint, &batch).await? {
-            matches
-                .entry(result.package_base)
-                .or_default()
-                .extend(result.commits);
-        }
-    }
-    packages
-        .iter()
-        .map(|package| {
-            let commits = matches.remove(&package.package_base).ok_or_else(|| {
-                anyhow::anyhow!(tr!("the AUR security API returned an incomplete response"))
-            })?;
-            Ok(remote_result(package, commits))
-        })
+    response
+        .results
+        .into_iter()
+        .zip(packages)
+        .map(|(result, package)| remote_result(package, result.commits))
         .collect()
 }
 
-fn lookup_batches(packages: &[LookupPackage]) -> Vec<Vec<LookupWirePackage>> {
-    let mut batches = Vec::new();
-    let mut batch = Vec::new();
-    let mut available = MAX_LOOKUPS;
-
-    for package in packages {
-        let mut offset = 0;
-        while offset < package.commits.len() {
-            if available == 0 {
-                batches.push(std::mem::take(&mut batch));
-                available = MAX_LOOKUPS;
-            }
-            let end = (offset + available).min(package.commits.len());
-            batch.push(LookupWirePackage {
-                package_base: package.package_base.clone(),
-                commits: package.commits[offset..end].to_vec(),
-            });
-            available -= end - offset;
-            offset = end;
-        }
-    }
-    if !batch.is_empty() {
-        batches.push(batch);
-    }
-    batches
-}
-
-async fn lookup(
-    client: &reqwest::Client,
-    endpoint: &Url,
-    packages: &[LookupWirePackage],
-) -> Result<Vec<LookupResult>> {
-    let response = client
-        .post(endpoint.clone())
-        .json(&LookupRequest { packages })
-        .send()
-        .await
-        .context(tr!("failed to contact the AUR security API"))?
-        .error_for_status()
-        .context(tr!("the AUR security API returned an error"))?
-        .json::<LookupResponse>()
-        .await
-        .context(tr!("the AUR security API returned invalid JSON"))?;
-
-    validate_response(packages, &response.results)?;
-    Ok(response.results)
-}
-
-fn validate_response(packages: &[LookupWirePackage], results: &[LookupResult]) -> Result<()> {
-    if packages.len() != results.len() {
-        bail!(tr!("the AUR security API returned an incomplete response"));
-    }
-    for (package, result) in packages.iter().zip(results) {
-        if package.package_base != result.package_base
-            || package.commits.len() != result.commits.len()
-        {
-            bail!(tr!("the AUR security API returned mismatched package data"));
-        }
-        for (commit, result) in package.commits.iter().zip(&result.commits) {
-            if !commit.eq_ignore_ascii_case(&result.commit) {
-                bail!(tr!("the AUR security API returned mismatched package data"));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn remote_result(package: &LookupPackage, commits: Vec<LookupCommitResult>) -> PackageResult {
+fn remote_result(
+    package: &LookupPackage,
+    commits: Vec<LookupCommitResult>,
+) -> Result<PackageResult> {
     let mut result = unreviewed_result(package);
     for commit in commits {
         if let Some(assessment) = commit.assessment {
+            let verdict = match assessment.verdict.as_str() {
+                "safe" => Verdict::Safe,
+                "suspicious" => Verdict::Suspicious,
+                "dangerous" => Verdict::Dangerous,
+                verdict => bail!(tr!("the AUR security API returned an unknown verdict '{}'; expected safe, suspicious, or dangerous", verdict)),
+            };
             result.covered += 1;
             merge_assessment(
                 &mut result.assessment,
                 Assessment {
-                    verdict: assessment.verdict,
+                    verdict,
                     explanation: assessment.explanation,
                     provider: assessment.provider,
                     model: assessment.model,
@@ -539,7 +426,7 @@ fn remote_result(package: &LookupPackage, commits: Vec<LookupCommitResult>) -> P
             );
         }
     }
-    result
+    Ok(result)
 }
 
 fn unreviewed_results(packages: &[LookupPackage]) -> Vec<PackageResult> {
@@ -806,28 +693,7 @@ fn indent(value: &str) -> String {
 mod tests {
     use std::fs;
 
-    use serde_json::json;
-
     use super::*;
-
-    fn package(package_base: &str, commits: &[&str]) -> LookupPackage {
-        LookupPackage {
-            package_base: package_base.to_string(),
-            directory: package_base.into(),
-            commits: commits.iter().map(|commit| (*commit).to_string()).collect(),
-            version: "2.1.0-1".to_string(),
-            head: commits.last().unwrap().to_string(),
-            upstream_head: commits.last().unwrap().to_string(),
-            baseline: None,
-        }
-    }
-
-    fn wire(package_base: &str, commits: &[&str]) -> LookupWirePackage {
-        LookupWirePackage {
-            package_base: package_base.to_string(),
-            commits: commits.iter().map(|commit| (*commit).to_string()).collect(),
-        }
-    }
 
     fn assessment(verdict: Verdict) -> Assessment {
         Assessment {
@@ -876,78 +742,8 @@ mod tests {
     }
 
     #[test]
-    fn validates_ordered_exact_response() {
-        let commit = "0123456789abcdef0123456789abcdef01234567";
-        let packages = vec![wire("paru", &[commit])];
-        let results = vec![LookupResult {
-            package_base: "paru".to_string(),
-            commits: vec![LookupCommitResult {
-                commit: commit.to_ascii_uppercase(),
-                assessment: None,
-            }],
-        }];
-        assert!(validate_response(&packages, &results).is_ok());
-    }
-
-    #[test]
-    fn rejects_incomplete_or_mismatched_response() {
-        let commit = "0123456789abcdef0123456789abcdef01234567";
-        let packages = vec![wire("paru", &[commit])];
-        assert!(validate_response(&packages, &[]).is_err());
-
-        let results = vec![LookupResult {
-            package_base: "yay".to_string(),
-            commits: vec![LookupCommitResult {
-                commit: commit.to_string(),
-                assessment: None,
-            }],
-        }];
-        assert!(validate_response(&packages, &results).is_err());
-    }
-
-    #[test]
     fn strips_terminal_control_characters() {
         assert_eq!(clean("safe\u{1b}[31m\nnext"), "safe[31m\nnext");
-    }
-
-    #[test]
-    fn serializes_only_the_remote_api_fields() {
-        let commit = "0123456789abcdef0123456789abcdef01234567";
-        let package = wire("paru", &[commit]);
-        assert_eq!(
-            serde_json::to_value(&package).unwrap(),
-            json!({ "package_base": "paru", "commits": [commit] })
-        );
-    }
-
-    #[test]
-    fn decodes_the_public_api_contract() {
-        let commit = "0123456789abcdef0123456789abcdef01234567";
-        let response: LookupResponse = serde_json::from_value(json!({
-            "results": [{
-                "package_base": "paru",
-                "commits": [{
-                    "commit": commit,
-                    "assessment": {
-                        "verdict": "suspicious",
-                        "explanation": "changed upstream",
-                        "provider": "codex",
-                        "model": "gpt-test",
-                        "checked_at": 42,
-                        "version": "2.1.0-1",
-                        "details_path": format!("/checks/paru/{commit}")
-                    }
-                }]
-            }]
-        }))
-        .expect("the API response should decode");
-
-        let assessment = response.results[0].commits[0]
-            .assessment
-            .as_ref()
-            .expect("assessment should be present");
-        assert_eq!(assessment.verdict, Verdict::Suspicious);
-        assert_eq!(assessment.explanation.as_deref(), Some("changed upstream"));
     }
 
     #[test]
@@ -979,17 +775,6 @@ mod tests {
         assert_eq!(report.status("yay"), Some(SecurityStatus::Suspicious));
         assert!(report.is_safe("paru"));
         assert_eq!(report.status("missing"), None);
-    }
-
-    #[test]
-    fn batches_by_total_commit_count_and_splits_large_ranges() {
-        let commit = "0123456789abcdef0123456789abcdef01234567";
-        let commits = vec![commit; MAX_LOOKUPS + 1];
-        let packages = vec![package("paru", &commits)];
-        let batches = lookup_batches(&packages);
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0][0].commits.len(), MAX_LOOKUPS);
-        assert_eq!(batches[1][0].commits.len(), 1);
     }
 
     #[test]
