@@ -9,7 +9,6 @@ use aur_security_checker::{
 };
 use futures::{stream, StreamExt};
 use tr::tr;
-use url::Url;
 
 use crate::config::Config;
 use crate::download::Bases;
@@ -24,6 +23,7 @@ pub enum SecurityDecision {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecurityStatus {
     Safe,
+    PartialSafe,
     Suspicious,
     Dangerous,
     Unreviewed,
@@ -79,13 +79,10 @@ enum Verdict {
     Dangerous,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Assessment {
     verdict: Verdict,
     explanation: Option<String>,
-    provider: String,
-    model: String,
-    details_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -95,8 +92,11 @@ struct PackageResult {
     version: String,
     commit_count: usize,
     covered: usize,
+    remote_covered: usize,
     target_covered: bool,
     assessment: Option<Assessment>,
+    remote_assessment: Option<Assessment>,
+    local_assessment: Option<Assessment>,
     error: Option<anyhow::Error>,
 }
 
@@ -112,6 +112,7 @@ impl PackageResult {
             Some(Verdict::Safe) if self.covered == self.commit_count && self.target_covered => {
                 SecurityStatus::Safe
             }
+            Some(Verdict::Safe) => SecurityStatus::PartialSafe,
             _ => SecurityStatus::Unreviewed,
         }
     }
@@ -175,6 +176,10 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
         unreviewed_results(&packages)
     };
 
+    if config.aur_security_remote {
+        print_remote_report(config, &results);
+    }
+
     if let Some(local) = local {
         let pending = packages
             .iter()
@@ -199,6 +204,7 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
                     let result = &mut results[index];
                     result.covered = result.commit_count;
                     result.target_covered = true;
+                    result.local_assessment = Some(assessment.clone());
                     merge_assessment(&mut result.assessment, assessment, false);
                 }
                 Err(error) => results[index].error = Some(error),
@@ -206,10 +212,7 @@ pub async fn check(config: &Config, bases: &Bases) -> Result<SecurityDecision> {
         }
     }
 
-    print_report_header(config);
-    for result in &results {
-        print_result(config, result);
-    }
+    print_report(config, &results, local);
     for item in &unavailable {
         print_unavailable(config, item);
     }
@@ -413,17 +416,13 @@ fn remote_result(
                 verdict => bail!(tr!("the AUR security API returned an unknown verdict '{}'; expected safe, suspicious, or dangerous", verdict)),
             };
             result.covered += 1;
-            merge_assessment(
-                &mut result.assessment,
-                Assessment {
-                    verdict,
-                    explanation: assessment.explanation,
-                    provider: assessment.provider,
-                    model: assessment.model,
-                    details_path: Some(assessment.details_path),
-                },
-                true,
-            );
+            result.remote_covered += 1;
+            let assessment = Assessment {
+                verdict,
+                explanation: assessment.explanation,
+            };
+            merge_assessment(&mut result.remote_assessment, assessment.clone(), true);
+            merge_assessment(&mut result.assessment, assessment, true);
         }
     }
     Ok(result)
@@ -440,8 +439,11 @@ fn unreviewed_result(package: &LookupPackage) -> PackageResult {
         version: package.version.clone(),
         commit_count: package.commits.len(),
         covered: 0,
+        remote_covered: 0,
         target_covered: package.head == package.upstream_head,
         assessment: None,
+        remote_assessment: None,
+        local_assessment: None,
         error: None,
     }
 }
@@ -479,9 +481,6 @@ async fn assess_locally(local: LocalConfig<'_>, package: &LookupPackage) -> Resu
     Ok(Assessment {
         verdict,
         explanation,
-        provider: local.provider.as_str().to_string(),
-        model: local.model.to_string(),
-        details_path: None,
     })
 }
 
@@ -569,76 +568,126 @@ fn print_local_start(config: &Config, count: usize, local: LocalConfig<'_>) {
     flush_stdout();
 }
 
-fn print_report_header(config: &Config) {
+fn print_report(config: &Config, results: &[PackageResult], local: Option<LocalConfig<'_>>) {
+    if results
+        .iter()
+        .any(|result| result.local_assessment.is_some() || result.error.is_some())
+    {
+        let heading = local.map_or_else(
+            || tr!("Local AUR security assessments"),
+            |local| {
+                tr!(
+                    "Local AUR security assessments from {}/{}",
+                    clean(local.provider.as_str()),
+                    clean(local.model)
+                )
+            },
+        );
+        print_report_header(config, heading);
+        for result in results {
+            if let Some(assessment) = &result.local_assessment {
+                print_assessment_result(
+                    config,
+                    result,
+                    assessment,
+                    result.commit_count,
+                    result.commit_count,
+                );
+            }
+            if let Some(error) = &result.error {
+                println!("    {}: {}", clean(&result.package_base), error);
+            }
+        }
+    }
+
+    for result in results {
+        if result.assessment.is_none() {
+            print_unreviewed_result(config, result);
+        }
+    }
+}
+
+fn print_remote_report(config: &Config, results: &[PackageResult]) {
+    print_report_header(config, tr!("Remote AUR security assessments"));
+    let mut results = results
+        .iter()
+        .filter(|result| result.remote_assessment.is_some())
+        .collect::<Vec<_>>();
+    results.sort_by_key(
+        |result| match result.remote_assessment.as_ref().unwrap().verdict {
+            Verdict::Safe if result.remote_covered == result.commit_count => 0,
+            Verdict::Safe => 1,
+            Verdict::Suspicious => 2,
+            Verdict::Dangerous => 3,
+        },
+    );
+    for result in results {
+        let assessment = result.remote_assessment.as_ref().unwrap();
+        print_assessment_result(
+            config,
+            result,
+            assessment,
+            result.remote_covered,
+            result.commit_count,
+        );
+    }
+}
+
+fn print_report_header(config: &Config, heading: String) {
     let c = config.color;
-    let heading = if config.aur_security_remote {
-        tr!("Remote AUR security assessments:")
-    } else {
-        tr!("Local AUR security assessments:")
-    };
-    println!("{} {}", c.action.paint("::"), c.bold.paint(heading));
+    println!(
+        "{} {}:",
+        c.action.paint("::"),
+        c.bold.paint(clean(&heading))
+    );
     flush_stdout();
 }
 
-fn print_result(config: &Config, result: &PackageResult) {
+fn print_assessment_result(
+    config: &Config,
+    result: &PackageResult,
+    assessment: &Assessment,
+    covered: usize,
+    total: usize,
+) {
     let c = config.color;
-    match result.status() {
-        SecurityStatus::Safe | SecurityStatus::Suspicious | SecurityStatus::Dangerous => {
-            let assessment = result
-                .assessment
-                .as_ref()
-                .expect("reviewed package status requires an assessment");
-            let verdict = match result.status() {
-                SecurityStatus::Safe => c.upgrade.paint(tr!("safe")),
-                SecurityStatus::Suspicious => c.warning.paint(tr!("suspicious")),
-                SecurityStatus::Dangerous => c.error.paint(tr!("dangerous")),
-                SecurityStatus::Unreviewed => unreachable!(),
-            };
-            let source = assessment_source(&config.aur_security_remote_url, assessment);
-            if let Some(coverage) = partial_coverage_text(result.covered, result.commit_count) {
-                println!(
-                    "    {} {} {}  {} ({}, {})",
-                    c.bold.paint(clean(&result.package_base)),
-                    clean(&result.version),
-                    &result.commit[..7],
-                    verdict,
-                    clean(&source),
-                    coverage
-                );
-            } else {
-                println!(
-                    "    {} {} {}  {} ({})",
-                    c.bold.paint(clean(&result.package_base)),
-                    clean(&result.version),
-                    &result.commit[..7],
-                    verdict,
-                    clean(&source)
-                );
-            }
-            if let Some(explanation) = &assessment.explanation {
-                println!("        {}", indent(&clean(explanation)));
-            }
-        }
-        SecurityStatus::Unreviewed => {
-            let reason = if result.target_covered {
-                partial_coverage_text(result.covered, result.commit_count)
-                    .expect("unreviewed upstream range must have partial coverage")
-            } else {
-                tr!("saved changes require local or manual review")
-            };
-            println!(
-                "    {} {} {}  {} ({})",
-                c.bold.paint(clean(&result.package_base)),
-                clean(&result.version),
-                &result.commit[..7],
-                c.warning.paint(tr!("unreviewed")),
-                reason
-            );
-        }
+    let verdict = match (assessment.verdict, covered != total) {
+        (Verdict::Safe, true) => c.warning.paint(tr!("partial safe")),
+        (Verdict::Safe, false) => c.upgrade.paint(tr!("safe")),
+        (Verdict::Suspicious, _) => c.warning.paint(tr!("suspicious")),
+        (Verdict::Dangerous, _) => c.error.paint(tr!("dangerous")),
+    };
+    let suffix = format!(" ({})", tr!("{} of {} commits assessed", covered, total));
+    println!(
+        "    {} {} {}  {}{}",
+        c.bold.paint(clean(&result.package_base)),
+        clean(&result.version),
+        &result.commit[..7],
+        verdict,
+        suffix
+    );
+    if let Some(explanation) = &assessment.explanation {
+        println!("        {}", indent(&clean(explanation)));
     }
-    if let Some(error) = &result.error {
-        println!("        {error:#}");
-    }
+    flush_stdout();
+}
+
+fn print_unreviewed_result(config: &Config, result: &PackageResult) {
+    let c = config.color;
+    let reason = if result.target_covered {
+        partial_coverage_text(result.covered, result.commit_count)
+            .expect("unreviewed upstream range must have partial coverage")
+    } else {
+        tr!("saved changes require local or manual review")
+    };
+    println!(
+        "    {} {} {}  {} ({})",
+        c.bold.paint(clean(&result.package_base)),
+        clean(&result.version),
+        &result.commit[..7],
+        c.warning.paint(tr!("unreviewed")),
+        reason
+    );
     flush_stdout();
 }
 
@@ -655,23 +704,6 @@ fn print_unavailable(config: &Config, item: &Unavailable) {
         item.error
     );
     flush_stdout();
-}
-
-fn assessment_source(remote_url: &Url, assessment: &Assessment) -> String {
-    assessment.details_path.as_ref().map_or_else(
-        || {
-            format!(
-                "{}/{}",
-                clean(&assessment.provider),
-                clean(&assessment.model)
-            )
-        },
-        |details_path| {
-            remote_url
-                .join(details_path)
-                .map_or_else(|_| clean(details_path), |url| url.to_string())
-        },
-    )
 }
 
 fn flush_stdout() {
@@ -699,9 +731,6 @@ mod tests {
         Assessment {
             verdict,
             explanation: None,
-            provider: "codex".to_string(),
-            model: "model".to_string(),
-            details_path: None,
         }
     }
 
@@ -712,23 +741,13 @@ mod tests {
             version: "2.1.0-1".to_string(),
             commit_count,
             covered,
+            remote_covered: covered,
             target_covered: true,
             assessment: verdict.map(assessment),
+            remote_assessment: None,
+            local_assessment: None,
             error: None,
         }
-    }
-
-    #[test]
-    fn displays_remote_url_or_local_provider_and_model_as_the_source() {
-        let remote_url = Url::parse("https://security.example/base").unwrap();
-        let mut assessment = assessment(Verdict::Safe);
-        assert_eq!(assessment_source(&remote_url, &assessment), "codex/model");
-
-        assessment.details_path = Some("/checks/paru/commit".to_string());
-        assert_eq!(
-            assessment_source(&remote_url, &assessment),
-            "https://security.example/checks/paru/commit"
-        );
     }
 
     #[test]
@@ -754,7 +773,7 @@ mod tests {
         );
         assert_eq!(
             result(Some(Verdict::Safe), 1, 2).status(),
-            SecurityStatus::Unreviewed
+            SecurityStatus::PartialSafe
         );
         assert!(!has_dangerous_assessment(&[result(None, 0, 1)]));
         assert!(has_dangerous_assessment(&[result(

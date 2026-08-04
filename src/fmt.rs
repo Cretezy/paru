@@ -555,6 +555,9 @@ pub fn print_install_verbose(
 fn security_status(config: &Config, report: &SecurityReport, package_base: &str) -> String {
     match report.status(package_base) {
         Some(SecurityStatus::Safe) => config.color.upgrade.paint(tr!("safe")).to_string(),
+        Some(SecurityStatus::PartialSafe) => {
+            config.color.warning.paint(tr!("partial safe")).to_string()
+        }
         Some(SecurityStatus::Suspicious) => {
             config.color.warning.paint(tr!("suspicious")).to_string()
         }
